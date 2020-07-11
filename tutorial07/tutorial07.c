@@ -293,7 +293,9 @@ int stream_component_open(
         int stream_index
 );
 
-void alloc_picture(void * userdata);
+void alloc_picture1(void * userdata);
+
+void alloc_picture2(void * userdata);
 
 int queue_picture1(
         VideoState * videoState,
@@ -1103,7 +1105,7 @@ int stream_component_open(VideoState * videoState, int stream_index)
  *
  * @param   userdata    the global VideoState reference.
  */
-void alloc_picture(void * userdata)
+void alloc_picture1(void * userdata)
 {
     // retrieve global VideoState reference.
     VideoState * videoState = (VideoState *)userdata;
@@ -1111,6 +1113,67 @@ void alloc_picture(void * userdata)
     // retrieve the VideoPicture pointed by the queue write index
     VideoPicture * videoPicture;
     videoPicture = &videoState->pict1q[videoState->pict1q_windex];
+
+    // check if the SDL_Overlay is allocated
+    if (videoPicture->frame)
+    {
+        // we already have an AVFrame allocated, free memory
+        av_frame_free(&videoPicture->frame);
+        av_free(videoPicture->frame);
+    }
+
+    // lock global screen mutex
+    SDL_LockMutex(screen_mutex);
+
+    // get the size in bytes required to store an image with the given parameters
+    int numBytes;
+    numBytes = av_image_get_buffer_size(
+            AV_PIX_FMT_YUV420P,
+            videoState->video1_ctx->width,
+            videoState->video1_ctx->height,
+            32
+    );
+
+    // allocate image data buffer
+    uint8_t * buffer = NULL;
+    buffer = (uint8_t *) av_malloc(numBytes * sizeof(uint8_t));
+
+    // alloc the AVFrame later used to contain the scaled frame
+    videoPicture->frame = av_frame_alloc();
+    if (videoPicture->frame == NULL)
+    {
+        printf("Could not allocate frame.\n");
+        return;
+    }
+
+    // The fields of the given image are filled in by using the buffer which points to the image data buffer.
+    av_image_fill_arrays(
+            videoPicture->frame->data,
+            videoPicture->frame->linesize,
+            buffer,
+            AV_PIX_FMT_YUV420P,
+            videoState->video1_ctx->width,
+            videoState->video1_ctx->height,
+            32
+    );
+
+    // unlock global screen mutex
+    SDL_UnlockMutex(screen_mutex);
+
+    // update VideoPicture struct fields
+    videoPicture->width = videoState->video1_ctx->width;
+    videoPicture->height = videoState->video1_ctx->height;
+    videoPicture->allocated = 1;
+}
+
+void alloc_picture2(void * userdata)
+{
+    // retrieve global VideoState reference.
+    VideoState * videoState = (VideoState *)userdata;
+
+    // retrieve the VideoPicture pointed by the queue write index
+    VideoPicture * videoPicture;
+    videoPicture = &videoState->pict2q[videoState->pict2q_windex];
 
     // check if the SDL_Overlay is allocated
     if (videoPicture->frame)
@@ -1208,7 +1271,7 @@ int queue_picture1(VideoState * videoState, AVFrame * pFrame, double pts)
         videoPicture->allocated = 0;
 
         // allocate a new SDL_Overlay for the VideoPicture struct
-        alloc_picture(videoState);
+        alloc_picture1(videoState);
 
         // check global quit flag
         if(videoState->quit)
@@ -1300,7 +1363,7 @@ int queue_picture2(VideoState * videoState, AVFrame * pFrame, double pts)
         videoPicture->allocated = 0;
 
         // allocate a new SDL_Overlay for the VideoPicture struct
-        alloc_picture(videoState);
+        alloc_picture2(videoState);
 
         // check global quit flag
         if(videoState->quit)
@@ -1852,8 +1915,8 @@ void video1_refresh_timer(void * userdata)
 
             if (_DEBUG_)
             {
-                printf("Current Frame PTS:\t\t%f\n", videoPicture->pts);
-                printf("Last Frame PTS:\t\t\t%f\n", videoState->frame1_last_pts);
+                printf("Current Frame1 PTS:\t\t%f\n", videoPicture->pts);
+                printf("Last Frame1 PTS:\t\t\t%f\n", videoState->frame1_last_pts);
             }
 
             // get last frame pts
@@ -1889,7 +1952,7 @@ void video1_refresh_timer(void * userdata)
                 audio_video_delay = videoPicture->pts - audio_ref_clock;
 
                 if (_DEBUG_)
-                    printf("Audio Video Delay:\t\t%f\n", audio_video_delay);
+                    printf("Audio Video1 Delay:\t\t%f\n", audio_video_delay);
 
                 // skip or repeat the frame taking into account the delay
                 sync_threshold = (pts_delay > AV_SYNC_THRESHOLD) ? pts_delay : AV_SYNC_THRESHOLD;
@@ -1933,7 +1996,7 @@ void video1_refresh_timer(void * userdata)
             schedule_refresh1(videoState, (Uint32)(real_delay * 1000 + 0.5));
 
             if (_DEBUG_)
-                printf("Next Scheduled Refresh:\t%f\n\n", (real_delay * 1000 + 0.5));
+                printf("Next Scheduled Refresh1:\t%f\n\n", (real_delay * 1000 + 0.5));
 
             // show the frame on the SDL_Surface (the screen)
             video1_display(videoState);
@@ -1997,8 +2060,8 @@ void video2_refresh_timer(void * userdata)
 
             if (_DEBUG_)
             {
-                printf("Current Frame PTS:\t\t%f\n", videoPicture->pts);
-                printf("Last Frame PTS:\t\t\t%f\n", videoState->frame2_last_pts);
+                printf("Current Frame2 PTS:\t\t%f\n", videoPicture->pts);
+                printf("Last Frame2 PTS:\t\t\t%f\n", videoState->frame2_last_pts);
             }
 
             // get last frame pts
@@ -2034,7 +2097,7 @@ void video2_refresh_timer(void * userdata)
                 audio_video_delay = videoPicture->pts - audio_ref_clock;
 
                 if (_DEBUG_)
-                    printf("Audio Video Delay:\t\t%f\n", audio_video_delay);
+                    printf("Audio Video2 Delay:\t\t%f\n", audio_video_delay);
 
                 // skip or repeat the frame taking into account the delay
                 sync_threshold = (pts_delay > AV_SYNC_THRESHOLD) ? pts_delay : AV_SYNC_THRESHOLD;
@@ -2075,7 +2138,8 @@ void video2_refresh_timer(void * userdata)
             if (_DEBUG_)
                 printf("Corrected Real Delay:\t%f\n", real_delay);
 
-            schedule_refresh2(videoState, (Uint32)(real_delay * 1000 + 0.5));
+            //schedule_refresh2(videoState, (Uint32)(real_delay * 1000 + 0.5));
+            schedule_refresh2(videoState, (Uint32)(real_delay * 1000 + 0.5) + 10);
 
             if (_DEBUG_)
                 printf("Next Scheduled Refresh:\t%f\n\n", (real_delay * 1000 + 0.5));
